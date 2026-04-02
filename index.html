@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wise Ai – 48 lines</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;font-family:system-ui;height:100vh;display:flex;flex-direction:column}
+.chat{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.user{background:#1E1E1E;align-self:flex-end;padding:10px 16px;border-radius:20px;color:#fff}
+.wise{align-self:center;text-align:center;font-weight:bold;color:#eee;max-width:90%}
+.wise strong{color:#0fc}
+.input-area{background:#0a0a0a;padding:12px;border-top:1px solid #333;display:flex;gap:10px}
+.big-input{flex:1;background:#1E1E1E;border:none;border-radius:40px;padding:14px 18px;color:#fff;font-size:16px}
+.send-btn{background:#0fc;border:none;border-radius:40px;padding:12px 20px;font-weight:bold;color:#000;cursor:pointer}
+.code-box{background:#004D00;border:1px solid #0f0;border-radius:12px;padding:12px;margin:8px 0}
+.code-box pre{white-space:pre-wrap;color:#cfc;font-family:monospace}
+.copy-btn{background:#0a2a0a;color:#0f0;border:none;padding:6px 12px;border-radius:20px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="chat" id="chat">
+<div class="wise">✨ <strong>Wise Ai</strong> ready.<br>💬 Type anything — apps, school, code.</div>
+</div>
+<div class="input-area">
+<input type="text" class="big-input" id="userInput" placeholder="Make me a calculator app...">
+<button class="send-btn" id="sendBtn">Send</button>
+</div>
+<script>
+const chat=document.getElementById('chat');
+const input=document.getElementById('userInput');
+const send=document.getElementById('sendBtn');
+
+function addMessage(text,isUser){
+  const div=document.createElement('div');
+  div.className=isUser?'user':'wise';
+  div.innerText=text;
+  chat.appendChild(div);
+  div.scrollIntoView({behavior:'smooth'});
+}
+
+function addCodeBox(code){
+  const box=document.createElement('div');
+  box.className='code-box';
+  const pre=document.createElement('pre');
+  pre.textContent=code;
+  box.appendChild(pre);
+  const btn=document.createElement('button');
+  btn.innerText='📋 Copy';
+  btn.className='copy-btn';
+  btn.onclick=()=>{navigator.clipboard.writeText(code);btn.innerText='✓ Copied!';setTimeout(()=>btn.innerText='📋 Copy',1500);};
+  box.appendChild(btn);
+  chat.appendChild(box);
+}
+
+async function getReply(msg){
+  const low=msg.toLowerCase();
+  if(low.includes('make me') && (low.includes('calculator')||low.includes('todo'))){
+    addMessage("🛠️ Step 1: Building your app...",false);
+    await new Promise(r=>setTimeout(r,300));
+    addMessage("📝 Step 2: Writing code...",false);
+    await new Promise(r=>setTimeout(r,400));
+    const code=`<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wise Calc</title><style>body{background:#000;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;font-family:system-ui;}.calc{background:#111;padding:20px;border-radius:40px;box-shadow:0 0 15px #0f0;width:280px;}.display{background:#222;color:#0f0;font-size:2.5rem;padding:20px;text-align:right;border-radius:20px;margin-bottom:20px;}.buttons{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}button{background:#2a2a2a;color:#0f0;border:none;padding:20px;font-size:1.5rem;border-radius:40px;}button.operator{background:#3a3a00;}</style></head><body><div class="calc"><div class="display" id="display">0</div><div class="buttons"><button onclick="clearDisplay()">C</button><button onclick="append('/')">/</button><button onclick="append('*')">*</button><button onclick="backspace()">⌫</button><button onclick="append('7')">7</button><button onclick="append('8')">8</button><button onclick="append('9')">9</button><button class="operator" onclick="append('-')">-</button><button onclick="append('4')">4</button><button onclick="append('5')">5</button><button onclick="append('6')">6</button><button class="operator" onclick="append('+')">+</button><button onclick="append('1')">1</button><button onclick="append('2')">2</button><button onclick="append('3')">3</button><button class="operator" onclick="calculate()">=</button><button onclick="append('0')">0</button><button onclick="append('.')">.</button></div></div><script>let display=document.getElementById('display');let current='';function updateDisplay(){display.innerText=current||'0';}function append(val){current+=val;updateDisplay();}function clearDisplay(){current='';updateDisplay();}function calculate(){try{current=eval(current).toString();updateDisplay();}catch(e){current='Error';updateDisplay();}}function backspace(){current=current.slice(0,-1);updateDisplay();}<\\/script></body></html>`;
+    addMessage("✅ Step 3: Code ready – copy or use below.",false);
+    addCodeBox(code);
+    return "";
+  } else if(low.includes('teach')||low.includes('algebra')||low.includes('essay')){
+    return "📃 White page (handwritten):\n\n"+msg+"\n\n✏️ Break into steps. Ask for details.";
+  } else {
+    return "✨ Wise Ai: \""+msg+"\" – try \"make me a calculator app\" or \"teach me algebra\".";
+  }
+}
+
+async function sendMessage(){
+  const text=input.value.trim();
+  if(!text) return;
+  addMessage(text,true);
+  input.value='';
+  const typing=document.createElement('div');
+  typing.className='wise';
+  typing.innerText='⚡ Thinking...';
+  chat.appendChild(typing);
+  const reply=await getReply(text);
+  chat.removeChild(typing);
+  if(reply) addMessage(reply,false);
+}
+
+send.addEventListener('click',sendMessage);
+input.addEventListener('keypress',(e)=>{if(e.key==='Enter'){e.preventDefault();sendMessage();}});
+</script>
+</body>
+</html>
