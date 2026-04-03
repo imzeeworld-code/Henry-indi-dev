@@ -396,6 +396,7 @@ sel-s{background:var(--surface);color:var(--white);border:1px solid var(--border
     <div class="chip" onclick="runCmd('generate password')">🔐 Password</div>
     <div class="chip" onclick="switchTab('tools')">🔧 Tools</div>
     <div class="chip" onclick="switchTab('apps')">📱 Apps</div>
+    <div class="chip" onclick="stopSpeaking()" style="color:var(--red);border-color:#3a1010;">⏹ Stop Voice</div>
   </div>
 </div>
 
@@ -559,22 +560,74 @@ const ts=()=>{const n=new Date();return`${String(n.getHours()).padStart(2,'0')}:
 function speak(txt){
   if(!Z.tts||!TTS_OK)return;
   try{
+    const c=txt.replace(/<[^>]+>/g,'').replace(/[^\x00-\x7F\u00C0-\u024F\u1E00-\u1EFF\s.,!?\-]/g,'').trim();
+    if(!c)return;
     speechSynthesis.cancel();
-    // strip html and emoji
-    const c=txt.replace(/<[^>]+>/g,'').replace(/[^\x00-\x7F\u00C0-\u024F\u1E00-\u1EFF]/g,'');
-    const u=new SpeechSynthesisUtterance(c);
-    u.rate=1.05;u.pitch=1.1;u.volume=1;
     const vs=speechSynthesis.getVoices();
     const v=vs.find(x=>x.lang.startsWith('en')&&x.name.toLowerCase().includes('female'))||vs.find(x=>x.lang.startsWith('en'));
-    if(v)u.voice=v;
-    u.onstart=()=>document.getElementById('ball').classList.add('spk');
-    u.onend=()=>document.getElementById('ball').classList.remove('spk');
-    speechSynthesis.speak(u);
-  }catch(e){console.warn('TTS:',e);}
+    const sentences=(c.match(/[^.!?]+[.!?]+/g)||[c]).map(s=>s.trim()).filter(s=>s.length>1);
+    let si=0;
+    document.getElementById('ball').classList.add('spk');
+    function next(){
+      if(si>=sentences.length){document.getElementById('ball').classList.remove('spk');return;}
+      const u=new SpeechSynthesisUtterance(sentences[si]);
+      u.rate=1.05;u.pitch=1.1;u.volume=1;if(v)u.voice=v;
+      u.onend=()=>{si++;next();};u.onerror=()=>{si++;next();};
+      speechSynthesis.speak(u);si++;
+    }
+    next();
+  }catch(e){console.warn('TTS speak:',e);}
 }
-function speakText(t){ // speak plain text directly
-  if(!Z.tts||!TTS_OK)return;
-  try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.rate=1.02;u.pitch=1.05;speechSynthesis.speak(u);}catch(e){}
+
+function speakText(fullText){
+  if(!TTS_OK)return;
+  try{
+    speechSynthesis.cancel();
+    Z.tts=true;
+    const btn=document.getElementById('ttsBtn');btn.textContent='🔊 ON';btn.classList.add('on');
+    // Split into sentences so each utterance is short enough for Android
+    const sentences=(fullText.match(/[^.!?\n]+[.!?\n]+/g)||[fullText]).map(s=>s.trim()).filter(s=>s.length>1);
+    let idx=0;
+    document.getElementById('ball').classList.add('spk');
+    function speakNext(){
+      if(idx>=sentences.length){document.getElementById('ball').classList.remove('spk');return;}
+      const u=new SpeechSynthesisUtterance(sentences[idx]);
+      u.rate=1.0;u.pitch=1.05;u.volume=1;
+      const vs=speechSynthesis.getVoices();
+      const v=vs.find(x=>x.lang.startsWith('en')&&x.name.toLowerCase().includes('female'))||vs.find(x=>x.lang.startsWith('en'));
+      if(v)u.voice=v;
+      u.onend=()=>{idx++;speakNext();};
+      u.onerror=()=>{idx++;speakNext();}; // skip errored sentence
+      speechSynthesis.speak(u);
+      idx++;
+    }
+    // Chrome Android workaround: use onend chaining
+    speechSynthesis.cancel();
+    idx=0;
+    const u0=new SpeechSynthesisUtterance(sentences[0]||'');
+    const vs=speechSynthesis.getVoices();
+    const v=vs.find(x=>x.lang.startsWith('en')&&x.name.toLowerCase().includes('female'))||vs.find(x=>x.lang.startsWith('en'));
+    if(v)u0.voice=v;
+    u0.rate=1.0;u0.pitch=1.05;u0.volume=1;
+    u0.onend=()=>{idx=1;speakChain();};
+    function speakChain(){
+      if(idx>=sentences.length){document.getElementById('ball').classList.remove('spk');return;}
+      const u=new SpeechSynthesisUtterance(sentences[idx]);
+      u.rate=1.0;u.pitch=1.05;u.volume=1;
+      if(v)u.voice=v;
+      u.onend=()=>{idx++;speakChain();};
+      u.onerror=()=>{idx++;speakChain();};
+      speechSynthesis.speak(u);
+    }
+    speechSynthesis.speak(u0);
+    toast('Reading... 🔊 ('+sentences.length+' sentences)');
+  }catch(e){console.warn('speakText error:',e);}
+}
+function stopSpeaking(){
+  if(!TTS_OK)return;
+  try{speechSynthesis.cancel();}catch(e){}
+  document.getElementById('ball').classList.remove('spk');
+  toast('Stopped reading.');
 }
 function toggleTTS(){
   if(!TTS_OK){toast('Voice not supported in this browser');return;}
@@ -647,60 +700,118 @@ function showTyping(){
 }
 function hideTyping(){const t=document.getElementById('typingInd');if(t)t.remove();}
 
-// ── WIKIPEDIA READER ──
+// ── SMART MULTI-SOURCE KNOWLEDGE FETCH ──
+// Sources: Wikipedia REST API → DuckDuckGo Instant Answer API → Dictionary API
 async function fetchWiki(topic){
   showTyping();
-  zR(`📖 Let me look up <em style="color:var(--gold)">"${topic}"</em> on Wikipedia for you...`,200);
+  addMsg('zee',`🔍 Searching my knowledge sources for <em style="color:var(--gold)">"${topic}"</em>...`);
+  let found=false;
+
+  // SOURCE 1: Wikipedia REST API
   try{
     const url=`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(topic)}`;
-    const res=await fetch(url);
+    const res=await fetch(url,{signal:AbortSignal.timeout(6000)});
+    if(res.ok){
+      const data=await res.json();
+      if(data.extract&&data.extract.length>40){
+        hideTyping();
+        Z.wikiData={title:data.title||topic,extract:data.extract,source:'Wikipedia'};
+        Z.lastWikiTopic=topic;
+        showInfoCard(data.title||topic,data.extract,'📖 Wikipedia',topic);
+        found=true;
+      }
+    }
+  }catch(e){console.log('Wiki failed:',e.message);}
+
+  // SOURCE 2: DuckDuckGo Instant Answer API (no CORS issues via jsonp trick)
+  if(!found){
+    try{
+      const url=`https://api.duckduckgo.com/?q=${encodeURIComponent(topic)}&format=json&no_redirect=1&no_html=1&skip_disambig=1`;
+      const res=await fetch(url,{signal:AbortSignal.timeout(6000)});
+      if(res.ok){
+        const data=await res.json();
+        const text=data.AbstractText||data.Answer||data.Definition||'';
+        const title=data.Heading||topic;
+        if(text.length>30){
+          hideTyping();
+          Z.wikiData={title,extract:text,source:'DuckDuckGo'};
+          Z.lastWikiTopic=topic;
+          showInfoCard(title,text,'🦆 DuckDuckGo',topic);
+          found=true;
+        }
+      }
+    }catch(e){console.log('DDG failed:',e.message);}
+  }
+
+  // SOURCE 3: Free Dictionary API (for word definitions)
+  if(!found){
+    try{
+      const url=`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(topic)}`;
+      const res=await fetch(url,{signal:AbortSignal.timeout(5000)});
+      if(res.ok){
+        const data=await res.json();
+        if(Array.isArray(data)&&data[0]){
+          const entry=data[0];
+          const word=entry.word||topic;
+          let text=`${word}`;
+          entry.meanings&&entry.meanings.forEach(m=>{
+            text+=`\n\n${m.partOfSpeech.toUpperCase()}:\n`;
+            m.definitions&&m.definitions.slice(0,3).forEach((d,i)=>{
+              text+=`${i+1}. ${d.definition}`;
+              if(d.example)text+=` (e.g. "${d.example}")`;
+              text+='\n';
+            });
+          });
+          if(entry.phonetics&&entry.phonetics[0]&&entry.phonetics[0].text) text=`Pronunciation: ${entry.phonetics[0].text}\n`+text;
+          hideTyping();
+          Z.wikiData={title:word,extract:text,source:'Dictionary'};
+          Z.lastWikiTopic=topic;
+          showInfoCard(word,text,'📚 Dictionary',topic);
+          found=true;
+        }
+      }
+    }catch(e){console.log('Dict failed:',e.message);}
+  }
+
+  if(!found){
     hideTyping();
-    if(!res.ok){zR(`Hmm, I couldn't find info on "${topic}" in Wikipedia. Try different words! 🤔`,300);return;}
-    const data=await res.json();
-    const title=data.title||topic;
-    const extract=data.extract||'No description found.';
-    // Store for re-read
-    Z.wikiData={title,extract};Z.lastWikiTopic=topic;
-    // Show card in chat
-    const card=document.createElement('div');
-    card.className='wiki-card';
-    // Truncate to first 3 sentences for preview
-    const sentences=extract.match(/[^.!?]+[.!?]+/g)||[extract];
-    const preview=sentences.slice(0,3).join(' ');
-    const hasMore=sentences.length>3;
-    card.innerHTML=`
-      <div class="wiki-title">📖 ${title}</div>
-      <div class="wiki-body" id="wikiBody">${preview}</div>
-      <div class="wiki-actions">
-        ${hasMore?`<div class="wiki-btn" onclick="expandWiki()">Read more ▼</div>`:''}
-        <div class="wiki-btn" onclick="readWikiAloud()">🔊 Read aloud</div>
-        <div class="wiki-btn" onclick="openWikiPage('${encodeURIComponent(topic)}')">🌐 Full page</div>
-        <div class="wiki-btn" onclick="copyWiki()">📋 Copy</div>
-      </div>`;
-    setTimeout(()=>{
-      const area=document.getElementById('chatArea');
-      const d=document.createElement('div');d.className='msg z';
-      const lbl=document.createElement('div');lbl.innerHTML=`<div class="zlbl">ZEE</div>`;
-      d.appendChild(lbl);d.appendChild(card);
-      area.appendChild(d);area.scrollTop=area.scrollHeight;
-      speak(`Here's what I found: ${preview.substring(0,200)}`);
-    },400);
-  }catch(e){hideTyping();zR(`Couldn't fetch Wikipedia info right now. Make sure you're online! 🌐`,300);}
+    zR(`Hmm, I searched Wikipedia, DuckDuckGo, and the Dictionary but couldn't find enough info on <em style="color:var(--gold)">"${topic}"</em>. 🤔<br><br>Try:<br>• Different spelling<br>• Shorter search term<br>• Or I can Google it for you — just say "search ${topic}"!`,400);
+  }
 }
-let wikiExpanded=false;
-function expandWiki(){
-  const body=document.getElementById('wikiBody');
-  if(!body||!Z.wikiData.extract)return;
-  if(!wikiExpanded){body.textContent=Z.wikiData.extract;wikiExpanded=true;}
-  else{const s=Z.wikiData.extract.match(/[^.!?]+[.!?]+/g)||[];body.textContent=s.slice(0,3).join(' ');wikiExpanded=false;}
+
+// Show info card in chat — FULL text, scrollable, with read aloud
+function showInfoCard(title,extract,sourceLabel,topic){
+  const cardId='wikiCard_'+Date.now();
+  const area=document.getElementById('chatArea');
+  const wrapper=document.createElement('div');wrapper.className='msg z';
+  const card=document.createElement('div');card.className='wiki-card';
+  const safeExtract=extract.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+  card.innerHTML=`
+    <div class="wiki-title">${sourceLabel}: ${title}</div>
+    <div class="wiki-body" id="${cardId}" style="max-height:220px;overflow-y:auto;">${safeExtract}</div>
+    <div style="font-size:9px;color:var(--muted);margin:6px 0 4px;">Scroll inside the box to read all ↕️</div>
+    <div class="wiki-actions">
+      <div class="wiki-btn" onclick="readWikiAloud()" style="color:var(--green);border-color:var(--green)">🔊 Read full aloud</div>
+      <div class="wiki-btn" onclick="stopSpeaking()" style="color:var(--red);border-color:var(--red)">⏹ Stop</div>
+      <div class="wiki-btn" onclick="openWikiPage('${encodeURIComponent(topic)}')">🌐 Wikipedia</div>
+      <div class="wiki-btn" onclick="copyWiki()">📋 Copy</div>
+    </div>`;
+  wrapper.appendChild(card);
+  area.appendChild(wrapper);
+  area.scrollTop=area.scrollHeight;
+  // Auto-speak first 2 sentences if TTS is on
+  const first2=extract.match(/[^.!?\n]+[.!?]+/g)||[];
+  const preview=first2.slice(0,2).join(' ');
+  if(Z.tts&&TTS_OK) speak(`Here is what I found about ${title}. ${preview}`);
+  else addMsg('zee',`Got it! Scroll the card above to read everything. Tap <strong style="color:var(--green)">🔊 Read full aloud</strong> to hear it all! 😊`);
 }
+
+function expandWiki(){} // kept for compatibility
 function readWikiAloud(){
-  if(!TTS_OK){toast('Turn on Voice first (🔊 OFF button)!');return;}
+  if(!TTS_OK){toast('Turn on Voice first! Tap the 🔊 button');return;}
   if(!Z.wikiData.extract){toast('Nothing to read yet!');return;}
-  Z.tts=true;
-  const b=document.getElementById('ttsBtn');b.textContent='🔊 ON';b.classList.add('on');
-  speakText(Z.wikiData.extract.substring(0,600));
-  toast('Reading Wikipedia article aloud... 🔊');
+  // Read the FULL article — no limit. speakText handles chunking.
+  speakText(Z.wikiData.extract);
 }
 function openWikiPage(topic){window.open(`https://en.wikipedia.org/wiki/${topic}`,'_blank');}
 function copyWiki(){
@@ -730,6 +841,8 @@ function goHome(){
 function exitHome(){document.getElementById('homeScreen').classList.remove('show');}
 
 // ── OPEN APP ──
+// Uses window.location.href so Android OS intercepts deep links natively.
+// Falls back to Play Store if app not installed.
 function openApp(key){
   const app=APPS[key];
   if(!app){zR(R.unkapp(key));return;}
@@ -737,15 +850,34 @@ function openApp(key){
   switchTab('chat');
   setTimeout(()=>{
     if(app.calc){switchTab('tools');toast('Calculator opened! 🧮');return;}
-    if(app.cam){window.location.href='intent://android.media.action.IMAGE_CAPTURE#Intent;scheme=android-app;end';return;}
-    if(app.sys){window.location.href=app.u;setTimeout(()=>{if(app.f)window.open(app.f,'_blank');},1000);return;}
-    if(app.u&&app.u!=='tel:'){
-      const ifr=document.createElement('iframe');ifr.style.cssText='display:none;position:absolute;';ifr.src=app.u;document.body.appendChild(ifr);
-      setTimeout(()=>{try{document.body.removeChild(ifr);}catch(e){}},600);
-      setTimeout(()=>{if(app.f)window.open(app.f,'_blank');else if(app.s)window.location.href=app.s;},900);
-    }else if(app.f){window.open(app.f,'_blank');}
-    else if(app.s){window.location.href=app.s;}
-  },700);
+    if(app.cam){
+      // Try camera intent
+      window.location.href='intent://android.media.action.IMAGE_CAPTURE#Intent;scheme=android-app;end';
+      return;
+    }
+    if(app.sys){
+      window.location.href=app.u;
+      return;
+    }
+    if(app.u && app.u.length>2){
+      // Use location.href — Android WebView/Chrome will intercept known deep links
+      // and route to the installed app. This is the correct approach.
+      window.location.href=app.u;
+      // After 1.2s if nothing opened, try Play Store
+      setTimeout(()=>{
+        try{
+          if(document.hasFocus()&&app.s){
+            // Still here = app not installed, go to Play Store
+            window.location.href=app.s;
+          }
+        }catch(e){}
+      },1200);
+    }else if(app.f){
+      window.location.href=app.f;
+    }else if(app.s){
+      window.location.href=app.s;
+    }
+  },600);
 }
 
 // ── TRANSLATE (via Google Translate web) ──
